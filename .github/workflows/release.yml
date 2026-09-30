@@ -1,20 +1,26 @@
 name: Build and Release pcbdev
 
-# Il workflow si attiva quando invii un tag che inizia con "v" (es. v1.0.0)
 on:
   push:
     tags:
       - 'v*'
 
-# Permessi necessari per creare la Release e allegare i file
 permissions:
   contents: write
 
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            artifact_name: pcbdev-linux
+          - os: macos-latest
+            artifact_name: pcbdev-macos
+          - os: windows-latest
+            artifact_name: pcbdev-windows
+
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -24,7 +30,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12' # Puoi usare la versione che preferisci
+          python-version: '3.12'
 
       - name: Prepara l'ambiente
         run: python command.py --init
@@ -32,24 +38,41 @@ jobs:
       - name: Compila l'eseguibile
         run: python command.py --compile
 
-      - name: Carica l'artefatto (temporaneo)
+      - name: Rinomina il binario in modo univoco
+        shell: bash
+        run: |
+          mkdir -p release
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp dist/pcbdev.exe "release/${{ matrix.artifact_name }}.exe"
+          else
+            cp dist/pcbdev "release/${{ matrix.artifact_name }}"
+            chmod +x "release/${{ matrix.artifact_name }}"
+          fi
+          ls -la release/
+
+      - name: Carica l'artefatto
         uses: actions/upload-artifact@v4
         with:
-          name: pcbdev-${{ matrix.os }}
-          path: dist/*
+          name: ${{ matrix.artifact_name }}
+          path: release/*
 
   release:
-    needs: build # Aspetta che tutte le build finiscano con successo
+    needs: build
     runs-on: ubuntu-latest
     steps:
       - name: Scarica tutti gli artefatti
         uses: actions/download-artifact@v4
         with:
-          path: artifacts
+          path: release
+          merge-multiple: true
+
+      - name: Lista file da pubblicare
+        run: ls -la release/
 
       - name: Pubblica la Release
         uses: softprops/action-gh-release@v2
         with:
-          # Allegherà tutti i file trovati nelle cartelle degli artefatti
-          files: artifacts/**/*
+          files: release/*
           generate_release_notes: true
+          draft: false
+          prerelease: false
