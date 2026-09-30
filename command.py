@@ -7,12 +7,14 @@ Uso:
     python command.py --update     Aggiorna il codice da GitHub (git pull)
     python command.py --compile    Compila l'eseguibile per il SO corrente
     python command.py --commit     Aggiunge, committa e pusha le modifiche
+    python command.py --release    Crea un tag e attiva il rilascio automatico
     python command.py --all        Esegue --update, --init e --compile in sequenza
     python command.py --help       Mostra questo messaggio
 """
 import argparse
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -20,11 +22,8 @@ from pathlib import Path
 
 
 # ============================================================
-#  FIX ENCODING (Windows)
+#  FIX ENCODING
 # ============================================================
-# Su Windows la console usa cp1252 di default, che non può stampare
-# emoji. Forziamo UTF-8 su stdout/stderr per evitare UnicodeEncodeError.
-
 if sys.platform == "win32":
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -32,7 +31,6 @@ if sys.platform == "win32":
     except (AttributeError, OSError):
         pass
 else:
-    # Su Unix forziamo UTF-8 anche se il locale è "C" o "POSIX"
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
@@ -50,18 +48,15 @@ REQUIREMENTS = PROJECT_DIR / "requirements.txt"
 ENTRY_POINT = PROJECT_DIR / "src" / "main.py"
 EXE_NAME = "pcbdev"
 IS_WINDOWS = platform.system() == "Windows"
+REPO_SLUG = "mvoud/pcbdev"   # ← cambio qui se il repo cambia
 
 
 # ============================================================
-#  UTILITÀ OUTPUT
+#  OUTPUT
 # ============================================================
 
 class Colors:
-    """Colori ANSI, disattivati se non supportati."""
-    enabled = (
-        sys.stdout.isatty()
-        and os.environ.get("NO_COLOR") is None
-    )
+    enabled = (sys.stdout.isatty() and os.environ.get("NO_COLOR") is None)
     RED    = "\033[0;31m" if enabled else ""
     GREEN  = "\033[0;32m" if enabled else ""
     YELLOW = "\033[1;33m" if enabled else ""
@@ -70,17 +65,10 @@ class Colors:
     NC     = "\033[0m"    if enabled else ""
 
 
-# Simboli ASCII-safe per Windows (evita problemi con cp1252 in ambienti strani)
 if IS_WINDOWS and not sys.stdout.encoding.lower().startswith("utf"):
-    S_INFO  = "[i]"
-    S_OK    = "[+]"
-    S_WARN  = "[!]"
-    S_ERR   = "[x]"
+    S_INFO, S_OK, S_WARN, S_ERR = "[i]", "[+]", "[!]", "[x]"
 else:
-    S_INFO  = "ℹ️"
-    S_OK    = "✅"
-    S_WARN  = "⚠️"
-    S_ERR   = "❌"
+    S_INFO, S_OK, S_WARN, S_ERR = "ℹ️", "✅", "⚠️", "❌"
 
 
 def info(msg):  print(f"{Colors.BLUE}{S_INFO}  {msg}{Colors.NC}")
@@ -90,12 +78,10 @@ def err(msg):   print(f"{Colors.RED}{S_ERR} {msg}{Colors.NC}", file=sys.stderr)
 
 
 # ============================================================
-#  UTILITÀ COMANDI
+#  UTILITÀ
 # ============================================================
 
 def run(cmd, cwd=None, check=True, capture=False):
-    """Esegue un comando mostrandolo a video."""
-    # Su Windows, se il comando è una stringa con spazi, passiamo una lista
     if isinstance(cmd, (list, tuple)):
         display = " ".join(str(c) for c in cmd)
     else:
@@ -119,28 +105,23 @@ def run(cmd, cwd=None, check=True, capture=False):
     except subprocess.CalledProcessError as e:
         if check:
             err(f"Comando fallito con codice {e.returncode}")
-            if capture and e.stdout:
-                print(e.stdout)
-            if capture and e.stderr:
-                print(e.stderr, file=sys.stderr)
+            if capture and e.stdout: print(e.stdout)
+            if capture and e.stderr: print(e.stderr, file=sys.stderr)
             sys.exit(1)
         return e
 
 
 def venv_python():
-    """Percorso del python dentro la venv (cross-platform)."""
     if IS_WINDOWS:
         return VENV_DIR / "Scripts" / "python.exe"
-    # Su Unix può essere python o python3
     for name in ("python", "python3"):
         candidate = VENV_DIR / "bin" / name
         if candidate.exists():
             return candidate
-    return VENV_DIR / "bin" / "python"   # fallback
+    return VENV_DIR / "bin" / "python"
 
 
 def venv_pip():
-    """Percorso del pip dentro la venv (cross-platform)."""
     if IS_WINDOWS:
         return VENV_DIR / "Scripts" / "pip.exe"
     for name in ("pip", "pip3"):
@@ -151,14 +132,12 @@ def venv_pip():
 
 
 def venv_activate_cmd():
-    """Comando per attivare la venv, specifico per OS."""
     if IS_WINDOWS:
         return f"{VENV_DIR}\\Scripts\\activate"
     return f"source {VENV_DIR}/bin/activate"
 
 
 def ensure_git():
-    """Verifica che git sia installato e che siamo in un repo."""
     if shutil.which("git") is None:
         err("git non è installato o non è nel PATH")
         sys.exit(1)
@@ -168,7 +147,6 @@ def ensure_git():
 
 
 def which_python():
-    """Restituisce il python di sistema da usare per creare la venv."""
     for name in ("python3", "python"):
         candidate = shutil.which(name)
         if candidate:
@@ -177,14 +155,46 @@ def which_python():
     sys.exit(1)
 
 
+def git_tags():
+    """Restituisce la lista dei tag locali (ordinati come dal git)."""
+    result = run(["git", "tag", "--sort=version:refname"],
+                 capture=True, check=False)
+    if result.returncode != 0:
+        return []
+    return [t.strip() for t in result.stdout.splitlines() if t.strip()]
+
+
+def ultima_versione():
+    """Restituisce l'ultimo tag di versione (es. 'v1.0.0') o None."""
+    tags = git_tags()
+    return tags[-1] if tags else None
+
+
+def bump_version(version, tipo="patch"):
+    """
+    Incrementa una versione semantica.
+    :param version: stringa tipo 'v1.0.0'
+    :param tipo: 'major', 'minor', 'patch'
+    :return: stringa tipo 'v1.0.1'
+    """
+    match = re.match(r"^v?(\d+)\.(\d+)\.(\d+)$", version)
+    if not match:
+        raise ValueError(f"Versione non valida: {version}")
+    major, minor, patch = map(int, match.groups())
+    if tipo == "major":
+        return f"v{major + 1}.0.0"
+    elif tipo == "minor":
+        return f"v{major}.{minor + 1}.0"
+    else:
+        return f"v{major}.{minor}.{patch + 1}"
+
+
 # ============================================================
 #  COMANDI
 # ============================================================
 
 def cmd_init(args):
-    """--init: crea la .venv e installa i requirements."""
     print(f"\n{Colors.BOLD}{Colors.BLUE}=== INIT ==={Colors.NC}\n")
-
     info(f"Python di sistema: {sys.version.split()[0]}")
     info(f"Piattaforma: {platform.system()} {platform.release()} ({platform.machine()})")
 
@@ -192,7 +202,6 @@ def cmd_init(args):
         err("Serve Python 3.9 o superiore")
         sys.exit(1)
 
-    # 1. Crea la venv se non esiste
     if VENV_DIR.is_dir():
         ok(f"Virtualenv già presente: {VENV_DIR}")
     else:
@@ -204,11 +213,9 @@ def cmd_init(args):
     py_venv = str(venv_python())
     pip_venv = str(venv_pip())
 
-    # 2. Aggiorna pip
     info("Aggiornamento pip...")
     run([py_venv, "-m", "pip", "install", "--upgrade", "pip", "--quiet"])
 
-    # 3. Installa requirements
     if REQUIREMENTS.is_file():
         info(f"Installazione dipendenze da {REQUIREMENTS.name}...")
         run([pip_venv, "install", "-r", str(REQUIREMENTS), "--quiet"])
@@ -216,7 +223,6 @@ def cmd_init(args):
     else:
         warn(f"File non trovato: {REQUIREMENTS}")
 
-    # 4. Verifica importabilità del main (con path esplicito, no raw string)
     info("Verifica import del modulo main...")
     src_dir = str(PROJECT_DIR / "src")
     check_script = f"import sys; sys.path.insert(0, {src_dir!r}); import main"
@@ -225,8 +231,6 @@ def cmd_init(args):
         ok("Modulo 'main' importabile")
     else:
         warn("Impossibile importare 'main' — controlla la struttura src/")
-        if result.stderr:
-            print(f"   Dettaglio: {result.stderr.strip().splitlines()[-1] if result.stderr.strip() else 'n/d'}")
 
     print()
     ok("Init completato!")
@@ -235,7 +239,6 @@ def cmd_init(args):
 
 
 def cmd_update(args):
-    """--update: aggiorna il codice da GitHub con git pull."""
     print(f"\n{Colors.BOLD}{Colors.BLUE}=== UPDATE ==={Colors.NC}\n")
     ensure_git()
 
@@ -245,7 +248,6 @@ def cmd_update(args):
     )
     if result.returncode != 0:
         warn("Nessun upstream configurato per il branch corrente")
-        warn("Configuralo con: git branch --set-upstream-to=origin/<branch>")
         return
 
     upstream = result.stdout.strip()
@@ -274,11 +276,9 @@ def cmd_update(args):
 
 
 def cmd_commit(args):
-    """--commit: aggiunge, committa e pusha le modifiche."""
     print(f"\n{Colors.BOLD}{Colors.BLUE}=== COMMIT ==={Colors.NC}\n")
     ensure_git()
 
-    # 1. Stato attuale
     info("Stato del repository:")
     status = run(["git", "status", "--short"], capture=True).stdout.rstrip()
     if not status:
@@ -287,7 +287,6 @@ def cmd_commit(args):
     print(status)
     print()
 
-    # 2. Messaggio di commit
     message = args.message
     if not message:
         info("Inserisci il messaggio di commit (lascia vuoto per annullare):")
@@ -301,7 +300,6 @@ def cmd_commit(args):
             warn("Messaggio vuoto, commit annullato")
             return
 
-    # 3. Add
     if args.paths:
         info(f"Aggiungo solo i file specificati: {args.paths}")
         for p in args.paths:
@@ -310,7 +308,6 @@ def cmd_commit(args):
         info("Aggiungo tutte le modifiche (git add -A)...")
         run(["git", "add", "-A"])
 
-    # 4. Verifica staging
     staged = run(["git", "diff", "--cached", "--name-only"], capture=True).stdout.strip()
     if not staged:
         warn("Nessun file in staging, commit annullato")
@@ -318,12 +315,10 @@ def cmd_commit(args):
     info(f"File in staging:\n{staged}")
     print()
 
-    # 5. Commit
     info(f"Commit: {message}")
     run(["git", "commit", "-m", message])
     ok("Commit creato")
 
-    # 6. Push
     if args.no_push:
         info("--no-push: salto il push")
         return
@@ -334,7 +329,6 @@ def cmd_commit(args):
     )
     if result.returncode != 0:
         warn("Nessun upstream configurato, salto il push")
-        warn("Configuralo con: git push -u origin <branch>")
         return
 
     info("Push verso il remoto...")
@@ -342,10 +336,85 @@ def cmd_commit(args):
     ok("Push completato")
 
 
-def cmd_compile(args):
-    """--compile: compila l'eseguibile in base al SO."""
-    print(f"\n{Colors.BOLD}{Colors.BLUE}=== COMPILE ==={Colors.NC}\n")
+def cmd_release(args):
+    """--release: crea un tag e attiva il rilascio automatico."""
+    print(f"\n{Colors.BOLD}{Colors.BLUE}=== RELEASE ==={Colors.NC}\n")
+    ensure_git()
 
+    # 1. Verifica modifiche non committate
+    status = run(["git", "status", "--porcelain"], capture=True).stdout.strip()
+    if status:
+        warn("Ci sono modifiche non committate:")
+        print(status)
+        print()
+        if args.message:
+            info("Committo automaticamente con il messaggio fornito...")
+            run(["git", "add", "-A"])
+            run(["git", "commit", "-m", args.message])
+            run(["git", "push"])
+            ok("Commit + push completati")
+        else:
+            err("Committa prima le modifiche, oppure usa -m per farlo automaticamente")
+            err("Esempio: python command.py --release -m 'Fix bug'")
+            sys.exit(1)
+
+    # 2. Determina la versione
+    if args.version:
+        nuova_versione = args.version
+        if not nuova_versione.startswith("v"):
+            nuova_versione = "v" + nuova_versione
+    else:
+        ultima = ultima_versione()
+        if not ultima:
+            nuova_versione = "v0.1.0"
+            info(f"Nessun tag esistente, parto da {nuova_versione}")
+        else:
+            tipo = "major" if args.major else ("minor" if args.minor else "patch")
+            nuova_versione = bump_version(ultima, tipo)
+            info(f"Versione precedente: {ultima}")
+            info(f"Nuova versione:      {nuova_versione} ({tipo})")
+
+    # 3. Verifica che il tag non esista già
+    if nuova_versione in git_tags():
+        err(f"Il tag {nuova_versione} esiste già")
+        err("Usa --version vX.Y.Z per specificarne uno diverso")
+        sys.exit(1)
+
+    # 4. Verifica di essere sul branch main
+    branch = run(["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                 capture=True).stdout.strip()
+    if branch != "main":
+        warn(f"Sei sul branch '{branch}', non 'main'")
+        warn("Il workflow CI si attiva sul push di tag, non sul branch")
+
+    # 5. Crea il tag
+    info(f"Creazione tag {nuova_versione}...")
+    run(["git", "tag", nuova_versione])
+    ok(f"Tag {nuova_versione} creato localmente")
+
+    # 6. Pusha il tag
+    if args.no_push:
+        info("--no-push: tag creato ma non pushato")
+        info(f"Per pushare: git push origin {nuova_versione}")
+        return
+
+    info(f"Push del tag {nuova_versione}...")
+    run(["git", "push", "origin", nuova_versione])
+    ok(f"Tag {nuova_versione} pushato")
+
+    # 7. Mostra link utili
+    print()
+    ok(f"Release {nuova_versione} avviata!")
+    print()
+    info("Monitora il progresso:")
+    print(f"   https://github.com/{REPO_SLUG}/actions")
+    print()
+    info("La release sarà disponibile a:")
+    print(f"   https://github.com/{REPO_SLUG}/releases/tag/{nuova_versione}")
+
+
+def cmd_compile(args):
+    print(f"\n{Colors.BOLD}{Colors.BLUE}=== COMPILE ==={Colors.NC}\n")
     system = platform.system()
     info(f"Sistema operativo: {system} ({platform.machine()})")
 
@@ -358,7 +427,6 @@ def cmd_compile(args):
     py = str(venv_python())
     pip = str(venv_pip())
 
-    # Verifica/installa PyInstaller
     result = run([py, "-c", "import PyInstaller"], check=False, capture=True)
     if result.returncode != 0:
         warn("PyInstaller non trovato, installazione in corso...")
@@ -366,7 +434,6 @@ def cmd_compile(args):
     version = run([py, "-m", "PyInstaller", "--version"], capture=True).stdout.strip()
     ok(f"PyInstaller: {version}")
 
-    # Pulizia
     for d in ["build", "dist"]:
         p = PROJECT_DIR / d
         if p.is_dir():
@@ -375,26 +442,15 @@ def cmd_compile(args):
     for spec in PROJECT_DIR.glob("*.spec"):
         spec.unlink()
 
-    # Comando base
     pyinstaller_cmd = [
         py, "-m", "PyInstaller",
-        "--onefile",
-        "--name", EXE_NAME,
-        "--clean",
-        "--noconfirm",
+        "--onefile", "--name", EXE_NAME,
+        "--clean", "--noconfirm",
     ]
 
-    # Opzioni specifiche per OS
     if system == "Linux":
         if shutil.which("strip"):
             pyinstaller_cmd.append("--strip")
-        else:
-            warn("'strip' non trovato, salto l'ottimizzazione binaria")
-    elif system == "Darwin":
-        # universal2 richiede Python universal; se fallisce, lo omettiamo
-        # Lo aggiungiamo solo se l'utente lo richiede esplicitamente
-        # pyinstaller_cmd.extend(["--target-arch", "universal2"])
-        pass
 
     if not ENTRY_POINT.is_file():
         err(f"Entry point non trovato: {ENTRY_POINT}")
@@ -404,7 +460,6 @@ def cmd_compile(args):
     info("Avvio PyInstaller...")
     run(pyinstaller_cmd)
 
-    # Verifica output
     exe_path = PROJECT_DIR / "dist" / exe_name
     if not exe_path.is_file():
         err(f"Build fallita: {exe_path} non trovato")
@@ -413,17 +468,9 @@ def cmd_compile(args):
     size_mb = exe_path.stat().st_size / (1024 * 1024)
     print()
     ok(f"Eseguibile compilato: {exe_path} ({size_mb:.1f} MB)")
-    print()
-    info("Prossimi passi:")
-    if IS_WINDOWS:
-        print(f"   .\\dist\\{exe_name} <percorso_progetto>")
-    else:
-        print(f"   ./dist/{exe_name} <percorso_progetto>")
-        print(f"   cp dist/{exe_name} ~/.local/bin/    → installazione nel PATH")
 
 
 def cmd_all(args):
-    """--all: esegue update, init e compile in sequenza."""
     cmd_update(args)
     cmd_init(args)
     cmd_compile(args)
@@ -444,8 +491,11 @@ Esempi:
   python command.py --update                            Aggiorna da GitHub
   python command.py --compile                           Compila l'eseguibile
   python command.py --commit -m "Fix generazione pin"   Commit + push
-  python command.py --commit                            Commit interattivo
-  python command.py --commit --no-push -m "WIP"         Commit senza push
+  python command.py --release                           Release (bump patch automatico)
+  python command.py --release --minor                   Release (bump minor)
+  python command.py --release --major                   Release (bump major)
+  python command.py --release --version v2.0.0          Release con versione specifica
+  python command.py --release -m "Fix bug"              Committa + release in un colpo
   python command.py --all                               Update + Init + Compile
         """,
     )
@@ -455,14 +505,24 @@ Esempi:
     group.add_argument("--update",  action="store_true", help="Aggiorna il codice da GitHub")
     group.add_argument("--compile", action="store_true", help="Compila l'eseguibile per il SO corrente")
     group.add_argument("--commit",  action="store_true", help="Aggiunge, committa e pusha le modifiche")
+    group.add_argument("--release", action="store_true", help="Crea un tag e attiva il rilascio automatico")
     group.add_argument("--all",     action="store_true", help="Esegue --update, --init e --compile")
 
+    # Opzioni per --commit
     parser.add_argument("-m", "--message", type=str, default=None,
-                        help="Messaggio di commit (solo con --commit)")
+                        help="Messaggio di commit (solo con --commit o --release)")
     parser.add_argument("--no-push", action="store_true",
-                        help="Non eseguire il push (solo con --commit)")
+                        help="Non eseguire il push (solo con --commit o --release)")
     parser.add_argument("--paths", nargs="+", default=None,
                         help="Aggiungi solo questi file specifici (solo con --commit)")
+
+    # Opzioni per --release
+    parser.add_argument("--version", type=str, default=None,
+                        help="Versione specifica (solo con --release, es. v2.0.0)")
+    parser.add_argument("--major", action="store_true",
+                        help="Bump major (solo con --release)")
+    parser.add_argument("--minor", action="store_true",
+                        help="Bump minor (solo con --release)")
 
     args = parser.parse_args()
 
@@ -471,6 +531,7 @@ Esempi:
         elif args.update:  cmd_update(args)
         elif args.compile: cmd_compile(args)
         elif args.commit:  cmd_commit(args)
+        elif args.release: cmd_release(args)
         elif args.all:     cmd_all(args)
     except KeyboardInterrupt:
         print()
