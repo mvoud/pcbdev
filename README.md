@@ -1,4 +1,3 @@
-cat > README.md << 'EOF'
 # pcbdev
 
 > Build easily your own PCB libraries with a JSON-based language.
