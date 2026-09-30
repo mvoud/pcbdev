@@ -3,7 +3,7 @@
 > Build easily your own PCB libraries with a JSON-based language.
 > Starting from a pinout reference, generate KiCad symbols and footprints automatically.
 
-## ✨ Features
+## Features
 
 - 📝 Define your board once in a simple `layout.json`
 - 🔧 Generate multiple footprint variants (THT, SMD, castellated)
