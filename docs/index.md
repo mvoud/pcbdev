@@ -22,5 +22,3 @@ Many development board manufacturers — Waveshare, DFRobot, M5Stack — **do no
 All in **one command**.
 
 ---
-
-## Quick example
