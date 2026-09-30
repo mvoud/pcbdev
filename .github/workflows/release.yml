@@ -4,15 +4,12 @@ on:
   push:
     tags:
       - 'v*'
-  workflow_dispatch:      # permette di lanciarlo manualmente da GitHub
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  # ============================================================
-  #  BUILD PER OS
-  # ============================================================
   build:
     strategy:
       fail-fast: false
@@ -28,11 +25,9 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
@@ -46,58 +41,32 @@ jobs:
         shell: bash
         run: ls -la dist/
 
-      # --------------------------------------------------------
-      #  PACKAGING SPECIFICO PER OS
-      # --------------------------------------------------------
-
-      # -------- Linux: AppImage + .deb --------
-      - name: Package Linux (AppImage)
+      # ---------- LINUX ----------
+      - name: Package Linux (.tar.gz + .deb)
         if: runner.os == 'Linux'
         shell: bash
         run: |
           set -e
-          mkdir -p packaging/AppDir/usr/bin
-          mkdir -p packaging/AppDir/usr/share/applications
-          mkdir -p packaging/AppDir/usr/share/icons/hicolor/256x256/apps
+          mkdir -p release
 
-          # Copia il binario
-          cp dist/pcbdev packaging/AppDir/usr/bin/pcbdev
-          chmod +x packaging/AppDir/usr/bin/pcbdev
+          # 1. Tar.gz portatile
+          mkdir -p pcbdev-linux/usr/local/bin
+          cp dist/pcbdev pcbdev-linux/usr/local/bin/pcbdev
+          chmod +x pcbdev-linux/usr/local/bin/pcbdev
+          cat > pcbdev-linux/README.txt << 'EOF'
+          PCBDEV - Generate KiCad libraries from JSON
 
-          # .desktop file
-          cat > packaging/AppDir/pcbdev.desktop << 'EOF'
-          [Desktop Entry]
-          Type=Application
-          Name=PCBDEV
-          Comment=Generate KiCad libraries from JSON
-          Exec=pcbdev
-          Icon=pcbdev
-          Terminal=true
-          Categories=Development;Electronics;
+          Installazione:
+            1. Copia il binario nel PATH:
+               sudo cp usr/local/bin/pcbdev /usr/local/bin/
+            2. Rendilo eseguibile:
+               sudo chmod +x /usr/local/bin/pcbdev
+            3. Provalo:
+               pcbdev --help
           EOF
-          cp packaging/AppDir/pcbdev.desktop packaging/AppDir/usr/share/applications/
+          tar czf release/pcbdev-linux.tar.gz -C pcbdev-linux .
 
-          # Icona placeholder (1x1 PNG trasparente)
-          printf '\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\x9cc\xf8\xcf\xc0\x00\x00\x00\x03\x00\x01\x00\x00\x00\x00IEND\xaeB`\x82' > packaging/AppDir/pcbdev.png
-          cp packaging/AppDir/pcbdev.png packaging/AppDir/usr/share/icons/hicolor/256x256/apps/pcbdev.png
-
-          # AppRun (entry point dell'AppImage)
-          cat > packaging/AppDir/AppRun << 'EOF'
-          #!/bin/bash
-          SELF=$(readlink -f "$0")
-          HERE=${SELF%/*}
-          exec "${HERE}/usr/bin/pcbdev" "$@"
-          EOF
-          chmod +x packaging/AppDir/AppRun
-
-          # Scarica appimagetool
-          wget -q https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage -O appimagetool
-          chmod +x appimagetool
-
-          # Crea l'AppImage (--appimage-extract-and-run evita problemi FUSE su CI)
-          ./appimagetool --appimage-extract-and-run packaging/AppDir pcbdev-linux.AppImage
-
-          # Crea anche un .deb
+          # 2. Pacchetto .deb
           mkdir -p deb/DEBIAN deb/usr/bin
           cp dist/pcbdev deb/usr/bin/pcbdev
           chmod +x deb/usr/bin/pcbdev
@@ -112,81 +81,64 @@ jobs:
            pcbdev is a CLI tool that generates KiCad symbols and footprints
            from a simple JSON-based layout description.
           EOF
-          dpkg-deb --build deb pcbdev-linux.deb
+          dpkg-deb --build deb release/pcbdev-linux.deb
 
-          # Prepara cartella release
-          mkdir -p release
-          cp pcbdev-linux.AppImage release/
-          cp pcbdev-linux.deb release/
+          # 3. Binario raw
           cp dist/pcbdev release/pcbdev-linux
 
-      # -------- macOS: .pkg --------
-      - name: Package macOS (.pkg)
+          ls -la release/
+
+      # ---------- MACOS ----------
+      - name: Package macOS (.pkg + raw)
         if: runner.os == 'macOS'
         shell: bash
         run: |
           set -e
+          mkdir -p release
+
+          # 1. Pacchetto .pkg (installer nativo)
           mkdir -p packaging/root/usr/local/bin
           cp dist/pcbdev packaging/root/usr/local/bin/pcbdev
           chmod +x packaging/root/usr/local/bin/pcbdev
-
-          # Crea il .pkg (non firmato, va bene per uso interno/amatoriale)
           pkgbuild --root packaging/root \
                    --identifier com.mvoud.pcbdev \
                    --version 1.0.0 \
                    --install-location / \
-                   pcbdev-macos.pkg
+                   release/pcbdev-macos.pkg
 
-          mkdir -p release
-          cp pcbdev-macos.pkg release/
+          # 2. Binario raw
           cp dist/pcbdev release/pcbdev-macos
 
-      # -------- Windows: .msi + .exe --------
-      - name: Package Windows (MSI)
+          ls -la release/
+
+      # ---------- WINDOWS ----------
+      - name: Package Windows (.zip + raw)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          # Crea una struttura per WiX
-          New-Item -ItemType Directory -Force -Path packaging | Out-Null
-          Copy-Item dist/pcbdev.exe packaging/pcbdev.exe
-
-          # Product.wxs — definizione dell'MSI
-          @"
-          <?xml version='1.0' encoding='windows-1252'?>
-          <Wix xmlns='http://schemas.microsoft.com/wix/2006/wi'>
-            <Product Id='*' Name='PCBDEV' Language='1033' Version='1.0.0'
-                     Manufacturer='mvoud' UpgradeCode='12345678-1234-1234-1234-123456789ABC'>
-              <Package InstallerVersion='200' Compressed='yes' InstallScope='perMachine'/>
-              <Directory Id='TARGETDIR' Name='SourceDir'>
-                <Directory Id='ProgramFiles64Folder' Name='PFiles'>
-                  <Directory Id='INSTALLFOLDER' Name='PCBDEV'>
-                    <Component Id='pcbdev' Guid='*'>
-                      <File Id='pcbdev.exe' Source='packaging\pcbdev.exe' KeyPath='yes'/>
-                      <Environment Id='PATH' Name='PATH' Value='[INSTALLFOLDER]'
-                                   Permanent='no' Part='last' Action='set'/>
-                    </Component>
-                  </Directory>
-                </Directory>
-              </Directory>
-              <Feature Id='Complete' Level='1'>
-                <ComponentRef Id='pcbdev'/>
-              </Feature>
-            </Product>
-          </Wix>
-          "@ | Out-File -Encoding UTF8 packaging\product.wxs
-
-          # Installa WiX via dotnet tool
-          dotnet tool install --global wix
-
-          # Compila l'MSI
-          wix build packaging\product.wxs -o pcbdev-windows.msi
-
-          # Prepara cartella release
           New-Item -ItemType Directory -Force -Path release | Out-Null
-          Copy-Item pcbdev-windows.msi release\pcbdev-windows.msi
+
+          # 1. ZIP con dentro l'eseguibile e un README
+          New-Item -ItemType Directory -Force -Path pcbdev-windows | Out-Null
+          Copy-Item dist\pcbdev.exe pcbdev-windows\pcbdev.exe
+          @"
+          PCBDEV - Generate KiCad libraries from JSON
+
+          Installazione:
+            1. Estrai pcbdev.exe in una cartella a piacere
+               (es. C:\Program Files\PCBDEV\)
+            2. Aggiungi quella cartella al PATH di sistema
+            3. Provalo:
+               pcbdev --help
+          "@ | Out-File -Encoding UTF8 pcbdev-windows\README.txt
+          Compress-Archive -Path pcbdev-windows\* -DestinationPath release\pcbdev-windows.zip -Force
+
+          # 2. Binario raw
           Copy-Item dist\pcbdev.exe release\pcbdev-windows.exe
 
-      # -------- Upload artefatti --------
+          Get-ChildItem release\
+
+      # ---------- UPLOAD ----------
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -194,24 +146,19 @@ jobs:
           path: release/*
           if-no-files-found: error
 
-  # ============================================================
-  #  RELEASE
-  # ============================================================
   release:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           path: release
           merge-multiple: true
 
-      - name: List files to publish
+      - name: List files
         run: ls -la release/
 
-      - name: Publish release
-        uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v2
         with:
           files: release/*
           generate_release_notes: true
