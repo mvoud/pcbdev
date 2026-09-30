@@ -1,0 +1,3 @@
+future==1.0.0
+KicadModTree==1.1.2
+PyYAML==6.0.3

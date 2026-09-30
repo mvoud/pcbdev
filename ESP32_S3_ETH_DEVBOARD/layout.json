@@ -1,0 +1,95 @@
+{
+    "board": {
+        "name": "ESP32-S3-ETH_DevBoard",
+        "description": "Waveshare ESP32-S3-ETH Development Board THT Footprint",
+        "tags": ["ESP32-S3", "ETH", "Waveshare"],
+        "dimensions": {
+            "width": 60.0,
+            "height": 30.0
+        },
+        "pads": {
+            "pitch_y": 2.54,
+            "offset_x": 12.7,
+            "diameter": 1.8,
+            "drill": 1.0,
+            "rows_per_side": 20
+        },
+        "symbol": {
+            "body_width": 25.4,
+            "body_height": 53.34,
+            "pin_length": 2.54,
+            "name_offset": 1.016
+        },
+           "footprints": [
+            {
+                "name": "ESP32-S3-ETH_DevBoard_THT",
+                "type": "tht_dual_row",
+                "rotation": 90,
+                "pitch_y": 2.54,
+                "offset_x": 12.7,
+                "pad_diameter": 1.8,
+                "drill": 1.0
+            },
+            {
+                "name": "ESP32-S3-ETH_DevBoard_SMD",
+                "type": "smd_dual_row",
+                "rotation": 90,
+                "pitch_y": 2.54,
+                "offset_x": 12.7,
+                "pad_width": 1.5,
+                "pad_height": 1.0
+            },
+            {
+                "name": "ESP32-S3-ETH_DevBoard_Castellated",
+                "type": "tht_castellated",
+                "rotation": 90,
+                "pitch_y": 2.54,
+                "offset_x": 12.7,
+                "pad_diameter": 1.5,
+                "drill": 0.9
+            }
+        ],
+        "pins": [
+            { "number": 1,  "name": "VBUS",    "type": "power_in",  "side": "left"  },
+            { "number": 2,  "name": "VSYS",    "type": "power_in",  "side": "left"  },
+            { "number": 3,  "name": "GND",     "type": "power_in",  "side": "left"  },
+            { "number": 4,  "name": "3V3_EN",  "type": "input",     "side": "left"  },
+            { "number": 5,  "name": "3V3",     "type": "power_out", "side": "left"  },
+            { "number": 6,  "name": "GPIO21",  "type": "bidirectional", "side": "left" },
+            { "number": 7,  "name": "GPIO17",  "type": "bidirectional", "side": "left" },
+            { "number": 8,  "name": "GND",     "type": "power_in",  "side": "left"  },
+            { "number": 9,  "name": "GPIO16",  "type": "bidirectional", "side": "left" },
+            { "number": 10, "name": "GPIO18",  "type": "bidirectional", "side": "left" },
+            { "number": 11, "name": "CHIP_UP", "type": "input",     "side": "left"  },
+            { "number": 12, "name": "GPIO15",  "type": "bidirectional", "side": "left" },
+            { "number": 13, "name": "GND",     "type": "power_in",  "side": "left"  },
+            { "number": 14, "name": "GPIO3",   "type": "bidirectional", "side": "left" },
+            { "number": 15, "name": "GPIO2",   "type": "bidirectional", "side": "left" },
+            { "number": 16, "name": "GPIO1",   "type": "bidirectional", "side": "left" },
+            { "number": 17, "name": "GPIO0",   "type": "bidirectional", "side": "left" },
+            { "number": 18, "name": "GND",     "type": "power_in",  "side": "left"  },
+            { "number": 19, "name": "GPIO44",  "type": "bidirectional", "side": "left" },
+            { "number": 20, "name": "GPIO43",  "type": "bidirectional", "side": "left" },
+            { "number": 21, "name": "GPIO20",  "type": "bidirectional", "side": "right" },
+            { "number": 22, "name": "GPIO19",  "type": "bidirectional", "side": "right" },
+            { "number": 23, "name": "GND",     "type": "power_in",  "side": "right" },
+            { "number": 24, "name": "GPIO48",  "type": "bidirectional", "side": "right" },
+            { "number": 25, "name": "GPIO47",  "type": "bidirectional", "side": "right" },
+            { "number": 26, "name": "GPIO46",  "type": "bidirectional", "side": "right" },
+            { "number": 27, "name": "GPIO45",  "type": "bidirectional", "side": "right" },
+            { "number": 28, "name": "GND",     "type": "power_in",  "side": "right" },
+            { "number": 29, "name": "GPIO42",  "type": "bidirectional", "side": "right" },
+            { "number": 30, "name": "GPIO41",  "type": "bidirectional", "side": "right" },
+            { "number": 31, "name": "GPIO40",  "type": "bidirectional", "side": "right" },
+            { "number": 32, "name": "GPIO39",  "type": "bidirectional", "side": "right" },
+            { "number": 33, "name": "GND",     "type": "power_in",  "side": "right" },
+            { "number": 34, "name": "GPIO38",  "type": "bidirectional", "side": "right" },
+            { "number": 35, "name": "GPIO37",  "type": "bidirectional", "side": "right" },
+            { "number": 36, "name": "GPIO36",  "type": "bidirectional", "side": "right" },
+            { "number": 37, "name": "GPIO35",  "type": "bidirectional", "side": "right" },
+            { "number": 38, "name": "GND",     "type": "power_in",  "side": "right" },
+            { "number": 39, "name": "GPIO34",  "type": "bidirectional", "side": "right" },
+            { "number": 40, "name": "GPIO33",  "type": "bidirectional", "side": "right" }
+        ]
+    }
+}

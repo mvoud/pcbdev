@@ -1,0 +1,6 @@
+{
+    "footprint_output_dir":  "~/.local/share/kicad/{kicad_version}/footprints/{project_name}.pretty",
+    "symbol_output_dir":     "~/.local/share/kicad/{kicad_version}/symbols",
+    "symbol_filename":       "{project_name}.kicad_sym",
+    "copy_to_kicad":         true
+}
