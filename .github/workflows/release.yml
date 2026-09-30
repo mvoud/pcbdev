@@ -4,11 +4,15 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:      # permette di lanciarlo manualmente da GitHub
 
 permissions:
   contents: write
 
 jobs:
+  # ============================================================
+  #  BUILD PER OS
+  # ============================================================
   build:
     strategy:
       fail-fast: false
@@ -24,7 +28,7 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - name: Checkout del codice
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Python
@@ -32,47 +36,185 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Prepara l'ambiente
+      - name: Setup environment
         run: python command.py --init
 
-      - name: Compila l'eseguibile
+      - name: Compile with PyInstaller
         run: python command.py --compile
 
-      - name: Rinomina il binario in modo univoco
+      - name: Verify build output
+        shell: bash
+        run: ls -la dist/
+
+      # --------------------------------------------------------
+      #  PACKAGING SPECIFICO PER OS
+      # --------------------------------------------------------
+
+      # -------- Linux: AppImage + .deb --------
+      - name: Package Linux (AppImage)
+        if: runner.os == 'Linux'
         shell: bash
         run: |
-          mkdir -p release
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            cp dist/pcbdev.exe "release/${{ matrix.artifact_name }}.exe"
-          else
-            cp dist/pcbdev "release/${{ matrix.artifact_name }}"
-            chmod +x "release/${{ matrix.artifact_name }}"
-          fi
-          ls -la release/
+          set -e
+          mkdir -p packaging/AppDir/usr/bin
+          mkdir -p packaging/AppDir/usr/share/applications
+          mkdir -p packaging/AppDir/usr/share/icons/hicolor/256x256/apps
 
-      - name: Carica l'artefatto
+          # Copia il binario
+          cp dist/pcbdev packaging/AppDir/usr/bin/pcbdev
+          chmod +x packaging/AppDir/usr/bin/pcbdev
+
+          # .desktop file
+          cat > packaging/AppDir/pcbdev.desktop << 'EOF'
+          [Desktop Entry]
+          Type=Application
+          Name=PCBDEV
+          Comment=Generate KiCad libraries from JSON
+          Exec=pcbdev
+          Icon=pcbdev
+          Terminal=true
+          Categories=Development;Electronics;
+          EOF
+          cp packaging/AppDir/pcbdev.desktop packaging/AppDir/usr/share/applications/
+
+          # Icona placeholder (1x1 PNG trasparente)
+          printf '\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\x9cc\xf8\xcf\xc0\x00\x00\x00\x03\x00\x01\x00\x00\x00\x00IEND\xaeB`\x82' > packaging/AppDir/pcbdev.png
+          cp packaging/AppDir/pcbdev.png packaging/AppDir/usr/share/icons/hicolor/256x256/apps/pcbdev.png
+
+          # AppRun (entry point dell'AppImage)
+          cat > packaging/AppDir/AppRun << 'EOF'
+          #!/bin/bash
+          SELF=$(readlink -f "$0")
+          HERE=${SELF%/*}
+          exec "${HERE}/usr/bin/pcbdev" "$@"
+          EOF
+          chmod +x packaging/AppDir/AppRun
+
+          # Scarica appimagetool
+          wget -q https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage -O appimagetool
+          chmod +x appimagetool
+
+          # Crea l'AppImage (--appimage-extract-and-run evita problemi FUSE su CI)
+          ./appimagetool --appimage-extract-and-run packaging/AppDir pcbdev-linux.AppImage
+
+          # Crea anche un .deb
+          mkdir -p deb/DEBIAN deb/usr/bin
+          cp dist/pcbdev deb/usr/bin/pcbdev
+          chmod +x deb/usr/bin/pcbdev
+          cat > deb/DEBIAN/control << 'EOF'
+          Package: pcbdev
+          Version: 1.0.0
+          Section: electronics
+          Priority: optional
+          Architecture: amd64
+          Maintainer: mvoud <mvoud@example.com>
+          Description: Generate KiCad libraries from JSON
+           pcbdev is a CLI tool that generates KiCad symbols and footprints
+           from a simple JSON-based layout description.
+          EOF
+          dpkg-deb --build deb pcbdev-linux.deb
+
+          # Prepara cartella release
+          mkdir -p release
+          cp pcbdev-linux.AppImage release/
+          cp pcbdev-linux.deb release/
+          cp dist/pcbdev release/pcbdev-linux
+
+      # -------- macOS: .pkg --------
+      - name: Package macOS (.pkg)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -e
+          mkdir -p packaging/root/usr/local/bin
+          cp dist/pcbdev packaging/root/usr/local/bin/pcbdev
+          chmod +x packaging/root/usr/local/bin/pcbdev
+
+          # Crea il .pkg (non firmato, va bene per uso interno/amatoriale)
+          pkgbuild --root packaging/root \
+                   --identifier com.mvoud.pcbdev \
+                   --version 1.0.0 \
+                   --install-location / \
+                   pcbdev-macos.pkg
+
+          mkdir -p release
+          cp pcbdev-macos.pkg release/
+          cp dist/pcbdev release/pcbdev-macos
+
+      # -------- Windows: .msi + .exe --------
+      - name: Package Windows (MSI)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Crea una struttura per WiX
+          New-Item -ItemType Directory -Force -Path packaging | Out-Null
+          Copy-Item dist/pcbdev.exe packaging/pcbdev.exe
+
+          # Product.wxs — definizione dell'MSI
+          @"
+          <?xml version='1.0' encoding='windows-1252'?>
+          <Wix xmlns='http://schemas.microsoft.com/wix/2006/wi'>
+            <Product Id='*' Name='PCBDEV' Language='1033' Version='1.0.0'
+                     Manufacturer='mvoud' UpgradeCode='12345678-1234-1234-1234-123456789ABC'>
+              <Package InstallerVersion='200' Compressed='yes' InstallScope='perMachine'/>
+              <Directory Id='TARGETDIR' Name='SourceDir'>
+                <Directory Id='ProgramFiles64Folder' Name='PFiles'>
+                  <Directory Id='INSTALLFOLDER' Name='PCBDEV'>
+                    <Component Id='pcbdev' Guid='*'>
+                      <File Id='pcbdev.exe' Source='packaging\pcbdev.exe' KeyPath='yes'/>
+                      <Environment Id='PATH' Name='PATH' Value='[INSTALLFOLDER]'
+                                   Permanent='no' Part='last' Action='set'/>
+                    </Component>
+                  </Directory>
+                </Directory>
+              </Directory>
+              <Feature Id='Complete' Level='1'>
+                <ComponentRef Id='pcbdev'/>
+              </Feature>
+            </Product>
+          </Wix>
+          "@ | Out-File -Encoding UTF8 packaging\product.wxs
+
+          # Installa WiX via dotnet tool
+          dotnet tool install --global wix
+
+          # Compila l'MSI
+          wix build packaging\product.wxs -o pcbdev-windows.msi
+
+          # Prepara cartella release
+          New-Item -ItemType Directory -Force -Path release | Out-Null
+          Copy-Item pcbdev-windows.msi release\pcbdev-windows.msi
+          Copy-Item dist\pcbdev.exe release\pcbdev-windows.exe
+
+      # -------- Upload artefatti --------
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
           path: release/*
+          if-no-files-found: error
 
+  # ============================================================
+  #  RELEASE
+  # ============================================================
   release:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - name: Scarica tutti gli artefatti
+      - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: release
           merge-multiple: true
 
-      - name: Lista file da pubblicare
+      - name: List files to publish
         run: ls -la release/
 
-      - name: Pubblica la Release
+      - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
           files: release/*
           generate_release_notes: true
           draft: false
           prerelease: false
+          overwrite_files: true
